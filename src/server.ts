@@ -1,4 +1,5 @@
 import express from "express";
+import path from "path";
 import helmet from "helmet";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -10,25 +11,28 @@ import courseRoutes from "./routes/courses";
 
 const app = express();
 
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
 app.use(cors({ origin: env.CLIENT_URL, credentials: true, methods: ["GET", "POST", "PATCH", "DELETE"], allowedHeaders: ["Content-Type", "Authorization"] }));
 app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 app.set("trust proxy", 1);
 
-const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false, message: { error: "Too many requests. Please try again later." } });
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: "Too many login attempts. Please try again later." }, skipSuccessfulRequests: true });
+// Serve course images from /public/images
+// Place your course flyer images here: public/images/maritime-governance.jpg etc.
+app.use("/images", express.static(path.join(__dirname, "../public/images")));
+
+const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false, message: { error: "Too many requests." } });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: "Too many login attempts." }, skipSuccessfulRequests: true });
 
 app.use("/api", globalLimiter);
 app.use("/api/auth/login", authLimiter);
-app.use("/api/auth/register", rateLimit({ windowMs: 60 * 60 * 1000, max: 3, message: { error: "Too many registration attempts. Please try again later." } }));
+app.use("/api/auth/register", rateLimit({ windowMs: 60 * 60 * 1000, max: 3, message: { error: "Too many registration attempts." } }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/courses", courseRoutes);
 
 app.get("/api/health", (_req, res) => { res.json({ status: "ok", timestamp: new Date().toISOString() }); });
-
 app.use((_req, res) => { res.status(404).json({ error: "Endpoint not found" }); });
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error("Unhandled error:", err);
