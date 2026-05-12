@@ -7,13 +7,16 @@ const envSchema = z.object({
   REFRESH_TOKEN_SECRET: z.string().min(32),
   ACCESS_TOKEN_EXPIRY: z.string().default("15m"),
   REFRESH_TOKEN_EXPIRY: z.string().default("7d"),
-  CLIENT_URL: z.string().url().default("http://localhost:5173"),
+  CLIENT_URL: z.string().default("http://localhost:5173"),
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  // Microsoft Graph email (optional in dev, required in production)
+  MS_TENANT_ID: z.string().default(""),
+  MS_CLIENT_ID: z.string().default(""),
+  MS_CLIENT_SECRET: z.string().default(""),
+  MS_SENDER_EMAIL: z.string().default(""),
 });
 
-// Fail fast: if env vars are missing, crash immediately on startup
-// — not on the first request 10 minutes later.
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
