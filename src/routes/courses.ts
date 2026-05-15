@@ -2,12 +2,15 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate } from "../middleware/auth";
+import { verifyCertificateId } from "../lib/hostinger";
+import { generateOtp, verifyOtp, otpEmailHtml } from "../lib/otp";
+import { sendEmail } from "../lib/email";
+import { env } from "../config/env";
 
 const router = Router();
 
-const enrollSchema = z.object({
-  accessCode: z.string().min(1, "Access code is required"),
-});
+const verifySchema = z.object({ certificateId: z.string().min(1, "Certificate ID is required") });
+const otpSchema = z.object({ verificationKey: z.string().min(1), otp: z.string().length(6, "OTP must be 6 digits") });
 
 // ─── GET /api/courses — Published courses only ──────────────
 router.get("/", async (_req: Request, res: Response) => {
@@ -31,7 +34,6 @@ router.get("/", async (_req: Request, res: Response) => {
       },
       orderBy: { featured: "desc" },
     });
-
     res.json(courses.map(c => ({
       ...c, tags: c.tags.map(t => t.tag), outcomes: c.outcomes.map(o => o.outcome),
       students: c._count.enrollments, price: Number(c.price),
@@ -85,15 +87,15 @@ router.get("/:id/access", authenticate, async (req: Request, res: Response) => {
   } catch (err) { console.error("Access check:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-// ─── POST /api/courses/:id/enroll — Verify access code & enroll ─
-router.post("/:id/enroll", authenticate, async (req: Request, res: Response) => {
+// ─── POST /api/courses/:id/verify — Step 1: Verify certificate ID ─
+router.post("/:id/verify", authenticate, async (req: Request, res: Response) => {
   try {
-    const parsed = enrollSchema.safeParse(req.body);
+    const parsed = verifySchema.safeParse(req.body);
     if (!parsed.success) { res.status(400).json({ error: parsed.error.errors[0].message }); return; }
 
     const courseId = req.params.id;
     const userId = req.user!.userId;
-    const { accessCode } = parsed.data;
+    const { certificateId } = parsed.data;
 
     // Check course exists
     const course = await prisma.course.findUnique({ where: { id: courseId } });
@@ -105,41 +107,147 @@ router.post("/:id/enroll", authenticate, async (req: Request, res: Response) => 
     });
     if (existing) { res.status(409).json({ error: "You are already enrolled in this course" }); return; }
 
-    // ─── Verify access code ─────────────────────────────────
-    // TODO: When Hostinger DB is ready, replace this block with:
-    //   const valid = await verifyCodeFromHostinger(accessCode, courseId);
-    // For now, check local course_access_codes table
-    const codeRecord = await prisma.courseAccessCode.findUnique({
-      where: { courseId_code: { courseId, code: accessCode } },
+    // Check if certificate ID is already used by another user in LMS
+    const usedEnrollment = await prisma.enrollment.findFirst({
+      where: { courseAccessId: certificateId },
     });
-
-    if (!codeRecord) {
-      res.status(403).json({ error: "Invalid access code. Please check your course certificate ID and try again." });
+    if (usedEnrollment) {
+      res.status(403).json({ error: "This certificate ID has already been used for enrollment." });
       return;
     }
 
-    if (codeRecord.usedBy) {
-      res.status(403).json({ error: "This access code has already been used." });
+    // Verify against Hostinger database
+    if (env.HOSTINGER_DB_HOST) {
+      const record = await verifyCertificateId(certificateId);
+      if (!record) {
+        res.status(403).json({ error: "Invalid certificate ID. Please check and try again." });
+        return;
+      }
+
+      // Get current user's email
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { firstName: true, email: true } });
+      if (!user) { res.status(401).json({ error: "User not found" }); return; }
+
+      // Generate OTP and send to registrant's email from Hostinger record
+      const otp = generateOtp({
+        email: record.email,
+        userId,
+        courseId,
+        certificateId,
+        registrantName: record.full_name,
+        registrantEmail: record.email,
+      });
+
+      // Send OTP email
+      if (env.MS_CLIENT_ID && env.MS_SENDER_EMAIL) {
+        await sendEmail({
+          to: record.email,
+          subject: "GoGMI Course Enrollment — Verification Code",
+          html: otpEmailHtml(record.full_name.split(" ")[0], otp.code),
+        });
+      } else {
+        // Dev mode
+        console.log("\n📧 OTP for " + record.email + ": " + otp.code + "\n");
+      }
+
+      // Mask email for frontend display
+      const emailParts = record.email.split("@");
+      const maskedEmail = emailParts[0].substring(0, 3) + "***@" + emailParts[1];
+
+      res.json({
+        message: "A verification code has been sent to " + maskedEmail,
+        verificationKey: otp.verificationKey,
+        registrantName: record.full_name,
+        maskedEmail,
+        applicantType: record.applicant_type,
+      });
+    } else {
+      // Fallback: local access codes table (for dev/testing)
+      const codeRecord = await prisma.courseAccessCode.findUnique({
+        where: { courseId_code: { courseId, code: certificateId } },
+      });
+      if (!codeRecord) { res.status(403).json({ error: "Invalid certificate ID." }); return; }
+      if (codeRecord.usedBy) { res.status(403).json({ error: "This certificate ID has already been used." }); return; }
+
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { firstName: true, email: true } });
+      if (!user) { res.status(401).json({ error: "User not found" }); return; }
+
+      const otp = generateOtp({
+        email: user.email,
+        userId,
+        courseId,
+        certificateId,
+        registrantName: user.firstName,
+        registrantEmail: user.email,
+      });
+
+      console.log("\n📧 OTP for " + user.email + ": " + otp.code + "\n");
+
+      const emailParts = user.email.split("@");
+      const maskedEmail = emailParts[0].substring(0, 3) + "***@" + emailParts[1];
+
+      res.json({
+        message: "A verification code has been sent to " + maskedEmail,
+        verificationKey: otp.verificationKey,
+        registrantName: user.firstName,
+        maskedEmail,
+        applicantType: "member",
+      });
+    }
+  } catch (err) {
+    console.error("Verify certificate:", err);
+    res.status(500).json({ error: err instanceof Error ? err.message : "Verification failed" });
+  }
+});
+
+// ─── POST /api/courses/:id/enroll — Step 2: Verify OTP & enroll ─
+router.post("/:id/enroll", authenticate, async (req: Request, res: Response) => {
+  try {
+    const parsed = otpSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: parsed.error.errors[0].message }); return; }
+
+    const { verificationKey, otp } = parsed.data;
+
+    // Verify OTP
+    const otpData = verifyOtp(verificationKey, otp);
+    if (!otpData) {
+      res.status(403).json({ error: "Invalid or expired verification code. Please try again." });
       return;
     }
 
-    // Mark code as used
-    await prisma.courseAccessCode.update({
-      where: { id: codeRecord.id },
-      data: { usedBy: userId, usedAt: new Date() },
-    });
+    // Ensure the OTP belongs to this user and course
+    if (otpData.userId !== req.user!.userId || otpData.courseId !== req.params.id) {
+      res.status(403).json({ error: "Invalid verification." });
+      return;
+    }
+
+    // Mark local access code as used (if using local fallback)
+    if (!env.HOSTINGER_DB_HOST) {
+      await prisma.courseAccessCode.updateMany({
+        where: { courseId: otpData.courseId, code: otpData.certificateId },
+        data: { usedBy: otpData.userId, usedAt: new Date() },
+      });
+    }
 
     // Create enrollment
     const enrollment = await prisma.enrollment.create({
-      data: { userId, courseId, courseAccessId: accessCode, status: "ACTIVE" },
+      data: {
+        userId: otpData.userId,
+        courseId: otpData.courseId,
+        courseAccessId: otpData.certificateId,
+        status: "ACTIVE",
+      },
       include: { course: { select: { title: true } } },
     });
 
     res.status(201).json({
       message: "Successfully enrolled in " + enrollment.course.title,
-      enrollment: { id: enrollment.id, courseId, progress: 0, status: "ACTIVE" },
+      enrollment: { id: enrollment.id, courseId: otpData.courseId, progress: 0, status: "ACTIVE" },
     });
-  } catch (err) { console.error("Enroll:", err); res.status(500).json({ error: "An error occurred" }); }
+  } catch (err) {
+    console.error("Enroll:", err);
+    res.status(500).json({ error: "Enrollment failed. Please try again." });
+  }
 });
 
 export default router;

@@ -10,11 +10,16 @@ const envSchema = z.object({
   CLIENT_URL: z.string().default("http://localhost:5173"),
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
-  // Microsoft Graph email (optional in dev, required in production)
+  // Microsoft Graph email
   MS_TENANT_ID: z.string().default(""),
   MS_CLIENT_ID: z.string().default(""),
   MS_CLIENT_SECRET: z.string().default(""),
   MS_SENDER_EMAIL: z.string().default(""),
+  // Hostinger MySQL (for certificate verification)
+  HOSTINGER_DB_HOST: z.string().default(""),
+  HOSTINGER_DB_USER: z.string().default(""),
+  HOSTINGER_DB_PASSWORD: z.string().default(""),
+  HOSTINGER_DB_NAME: z.string().default(""),
 });
 
 const parsed = envSchema.safeParse(process.env);
