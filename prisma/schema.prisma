@@ -71,6 +71,9 @@ model User {
   createdAt      DateTime      @default(now()) @map("created_at")
   updatedAt      DateTime      @updatedAt @map("updated_at")
 
+  
+  instructorCourses Course[] @relation("instructorCourses")
+
   refreshTokens     RefreshToken[]
   enrollments       Enrollment[]
   submissions       Submission[]
@@ -132,6 +135,8 @@ model Course {
   published      Boolean  @default(false)
   format         String?
   targetGroup    String?  @map("target_group")
+  instructorId   String?  @map("instructor_id")
+  instructor     User?    @relation("instructorCourses", fields: [instructorId], references: [id])
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 

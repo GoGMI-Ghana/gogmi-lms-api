@@ -8,6 +8,7 @@ import { env } from "./config/env";
 import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
 import courseRoutes from "./routes/courses";
+import instructorRoutes from "./routes/instructor";
 
 const app = express();
 
@@ -17,9 +18,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use(cookieParser());
 app.set("trust proxy", 1);
 
-// Serve course images from /public/images
-// Place your course flyer images here: public/images/maritime-governance.jpg etc.
-app.use("/images", express.static(path.join(__dirname, "../public/images")));
+app.use("/images", express.static(path.join(process.cwd(), "public/images")));
 
 const globalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false, message: { error: "Too many requests." } });
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false, message: { error: "Too many login attempts." }, skipSuccessfulRequests: true });
@@ -31,6 +30,7 @@ app.use("/api/auth/register", rateLimit({ windowMs: 60 * 60 * 1000, max: 3, mess
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/courses", courseRoutes);
+app.use("/api/instructor", instructorRoutes);
 
 app.get("/api/health", (_req, res) => { res.json({ status: "ok", timestamp: new Date().toISOString() }); });
 app.use((_req, res) => { res.status(404).json({ error: "Endpoint not found" }); });
