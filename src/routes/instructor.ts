@@ -5,7 +5,6 @@ import { authenticate, authorize } from "../middleware/auth";
 
 const router = Router();
 
-// All instructor routes require authentication + INSTRUCTOR or ADMIN role
 router.use(authenticate, authorize("INSTRUCTOR", "ADMIN"));
 
 // ─── GET /api/instructor/dashboard — Dashboard stats ────────
@@ -13,19 +12,15 @@ router.get("/dashboard", async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
 
-    // Get courses this instructor is assigned to
     const courses = await prisma.course.findMany({
       where: { instructorId: userId },
       select: {
         id: true, title: true, thumbnailCode: true, thumbnailColor: true, thumbnailImage: true,
         _count: { select: { enrollments: true } },
-        enrollments: {
-          select: { progress: true, lastAccessAt: true, status: true },
-        },
+        enrollments: { select: { progress: true, lastAccessAt: true, status: true } },
       },
     });
 
-    // For admin, if no assigned courses, show all published courses
     let effectiveCourses = courses;
     if (courses.length === 0 && req.user!.role === "ADMIN") {
       effectiveCourses = await prisma.course.findMany({
@@ -39,15 +34,10 @@ router.get("/dashboard", async (req: Request, res: Response) => {
     }
 
     const courseIds = effectiveCourses.map(c => c.id);
-
-    // Total students
     const totalStudents = effectiveCourses.reduce((sum, c) => sum + c._count.enrollments, 0);
-
-    // Average progress
     const allProgress = effectiveCourses.flatMap(c => c.enrollments.map(e => e.progress));
     const avgProgress = allProgress.length > 0 ? Math.round(allProgress.reduce((a, b) => a + b, 0) / allProgress.length) : 0;
 
-    // Pending submissions
     const pendingSubmissions = await prisma.submission.findMany({
       where: { assessment: { courseId: { in: courseIds } }, status: "SUBMITTED" },
       select: {
@@ -59,7 +49,6 @@ router.get("/dashboard", async (req: Request, res: Response) => {
       take: 10,
     });
 
-    // Upcoming assessments
     const upcomingAssessments = await prisma.assessment.findMany({
       where: { courseId: { in: courseIds }, dueDate: { gte: new Date() } },
       select: { id: true, title: true, type: true, dueDate: true, course: { select: { title: true } } },
@@ -67,42 +56,21 @@ router.get("/dashboard", async (req: Request, res: Response) => {
       take: 5,
     });
 
-    // Active learners (accessed in last 7 days)
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const activeLearners = await prisma.enrollment.count({
       where: { courseId: { in: courseIds }, lastAccessAt: { gte: sevenDaysAgo } },
     });
 
     res.json({
-      stats: {
-        totalCourses: effectiveCourses.length,
-        totalStudents,
-        pendingGrades: pendingSubmissions.length,
-        avgProgress,
-        activeLearners,
-      },
-      courses: effectiveCourses.map(c => ({
-        id: c.id, title: c.title, thumbnailCode: c.thumbnailCode,
-        thumbnailColor: c.thumbnailColor, thumbnailImage: c.thumbnailImage,
-        students: c._count.enrollments,
-      })),
-      pendingSubmissions: pendingSubmissions.map(s => ({
-        id: s.id,
-        student: s.user.firstName + " " + s.user.lastName,
-        email: s.user.email,
-        assignment: s.assessment.title,
-        type: s.assessment.type,
-        course: s.assessment.course.title,
-        submittedAt: s.submittedAt,
-      })),
-      upcomingAssessments: upcomingAssessments.map(a => ({
-        id: a.id, title: a.title, type: a.type, dueDate: a.dueDate, course: a.course.title,
-      })),
+      stats: { totalCourses: effectiveCourses.length, totalStudents, pendingGrades: pendingSubmissions.length, avgProgress, activeLearners },
+      courses: effectiveCourses.map(c => ({ id: c.id, title: c.title, thumbnailCode: c.thumbnailCode, thumbnailColor: c.thumbnailColor, thumbnailImage: c.thumbnailImage, students: c._count.enrollments })),
+      pendingSubmissions: pendingSubmissions.map(s => ({ id: s.id, student: s.user.firstName + " " + s.user.lastName, email: s.user.email, assignment: s.assessment.title, type: s.assessment.type, course: s.assessment.course.title, submittedAt: s.submittedAt })),
+      upcomingAssessments: upcomingAssessments.map(a => ({ id: a.id, title: a.title, type: a.type, dueDate: a.dueDate, course: a.course.title })),
     });
   } catch (err) { console.error("Instructor dashboard:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-// ─── GET /api/instructor/courses — Instructor's courses ─────
+// ─── GET /api/instructor/courses — Instructor's courses (with assessments) ─
 router.get("/courses", async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
@@ -119,6 +87,14 @@ router.get("/courses", async (req: Request, res: Response) => {
         modules: { select: { id: true, title: true, order: true, _count: { select: { lessons: true } } }, orderBy: { order: "asc" } },
         _count: { select: { enrollments: true, assessments: true } },
         enrollments: { select: { progress: true } },
+        assessments: {
+          select: {
+            id: true, title: true, type: true, dueDate: true, maxScore: true,
+            _count: { select: { submissions: true } },
+            submissions: { select: { status: true, score: true } },
+          },
+          orderBy: { order: "asc" },
+        },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -134,6 +110,15 @@ router.get("/courses", async (req: Request, res: Response) => {
         avgProgress,
         price: Number(c.price),
         enrollments: undefined,
+        assessments: c.assessments.map(a => ({
+          id: a.id, title: a.title, type: a.type, dueDate: a.dueDate, maxScore: a.maxScore,
+          submissions: a._count.submissions,
+          totalStudents: c._count.enrollments,
+          avgScore: a.submissions.filter(s => s.score !== null).length > 0
+            ? Math.round(a.submissions.filter(s => s.score !== null).reduce((sum, s) => sum + (s.score || 0), 0) / a.submissions.filter(s => s.score !== null).length)
+            : null,
+          pendingCount: a.submissions.filter(s => s.status === "SUBMITTED").length,
+        })),
       };
     }));
   } catch (err) { console.error("Instructor courses:", err); res.status(500).json({ error: "An error occurred" }); }
@@ -213,17 +198,9 @@ router.get("/students", async (req: Request, res: Response) => {
     });
 
     res.json(enrollments.map(e => ({
-      id: e.user.id,
-      name: e.user.firstName + " " + e.user.lastName,
-      email: e.user.email,
-      organization: e.user.organization,
-      country: e.user.country,
-      course: e.course.title,
-      courseId: e.course.id,
-      progress: e.progress,
-      status: e.status,
-      enrolledAt: e.enrolledAt,
-      lastAccessAt: e.lastAccessAt,
+      id: e.user.id, name: e.user.firstName + " " + e.user.lastName, email: e.user.email,
+      organization: e.user.organization, country: e.user.country, course: e.course.title,
+      courseId: e.course.id, progress: e.progress, status: e.status, enrolledAt: e.enrolledAt, lastAccessAt: e.lastAccessAt,
     })));
   } catch (err) { console.error("Instructor students:", err); res.status(500).json({ error: "An error occurred" }); }
 });
@@ -251,24 +228,15 @@ router.get("/submissions", async (req: Request, res: Response) => {
     });
 
     res.json(submissions.map(s => ({
-      id: s.id,
-      student: s.user.firstName + " " + s.user.lastName,
-      studentEmail: s.user.email,
-      assignment: s.assessment.title,
-      type: s.assessment.type,
-      course: s.assessment.course.title,
-      maxScore: s.assessment.maxScore,
-      status: s.status,
-      score: s.score,
-      feedback: s.feedback,
-      fileUrl: s.fileUrl,
-      submittedAt: s.submittedAt,
-      gradedAt: s.gradedAt,
+      id: s.id, student: s.user.firstName + " " + s.user.lastName, studentEmail: s.user.email,
+      assignment: s.assessment.title, type: s.assessment.type, course: s.assessment.course.title,
+      maxScore: s.assessment.maxScore, status: s.status, score: s.score, feedback: s.feedback,
+      fileUrl: s.fileUrl, submittedAt: s.submittedAt, gradedAt: s.gradedAt,
     })));
   } catch (err) { console.error("Instructor submissions:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-// ─── PATCH /api/instructor/submissions/:id/grade — Grade a submission ─
+// ─── PATCH /api/instructor/submissions/:id/grade ────────────
 const gradeSchema = z.object({ score: z.number().min(0).max(100), feedback: z.string().max(2000).optional() });
 
 router.patch("/submissions/:id/grade", async (req: Request, res: Response) => {
@@ -301,8 +269,6 @@ router.post("/assessments", async (req: Request, res: Response) => {
     if (!parsed.success) { res.status(400).json({ error: parsed.error.errors[0].message }); return; }
 
     const { courseId, title, type, dueDate, maxScore } = parsed.data;
-
-    // Get current count for ordering
     const count = await prisma.assessment.count({ where: { courseId } });
 
     const assessment = await prisma.assessment.create({
@@ -313,7 +279,7 @@ router.post("/assessments", async (req: Request, res: Response) => {
   } catch (err) { console.error("Create assessment:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-// ─── POST /api/instructor/announcements — Post announcement ─
+// ─── POST /api/instructor/announcements ─────────────────────
 const createAnnouncementSchema = z.object({
   courseId: z.string().min(1),
   title: z.string().min(1).max(200),
@@ -328,18 +294,14 @@ router.post("/announcements", async (req: Request, res: Response) => {
     const user = await prisma.user.findUnique({ where: { id: req.user!.userId }, select: { firstName: true, lastName: true } });
 
     const announcement = await prisma.announcement.create({
-      data: {
-        ...parsed.data,
-        audience: "course",
-        author: user ? user.firstName + " " + user.lastName : "Instructor",
-      },
+      data: { ...parsed.data, audience: "course", author: user ? user.firstName + " " + user.lastName : "Instructor" },
     });
 
     res.status(201).json(announcement);
   } catch (err) { console.error("Create announcement:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-// ─── GET /api/instructor/announcements — Get announcements ──
+// ─── GET /api/instructor/announcements ──────────────────────
 router.get("/announcements", async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
@@ -357,7 +319,7 @@ router.get("/announcements", async (req: Request, res: Response) => {
   } catch (err) { console.error("Instructor announcements:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-// ─── GET /api/instructor/analytics — Course analytics ───────
+// ─── GET /api/instructor/analytics ──────────────────────────
 router.get("/analytics", async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
@@ -368,14 +330,9 @@ router.get("/analytics", async (req: Request, res: Response) => {
       where: courseFilter,
       select: {
         id: true, title: true,
-        modules: {
-          select: { title: true, order: true, _count: { select: { lessons: true } } },
-          orderBy: { order: "asc" },
-        },
+        modules: { select: { title: true, order: true, _count: { select: { lessons: true } } }, orderBy: { order: "asc" } },
         enrollments: { select: { progress: true, status: true, lastAccessAt: true } },
-        assessments: {
-          select: { title: true, submissions: { select: { score: true, status: true } } },
-        },
+        assessments: { select: { title: true, submissions: { select: { score: true, status: true } } } },
       },
     });
 
@@ -386,20 +343,12 @@ router.get("/analytics", async (req: Request, res: Response) => {
       const active = c.enrollments.filter(e => e.lastAccessAt && e.lastAccessAt >= sevenDaysAgo).length;
       const completed = c.enrollments.filter(e => e.status === "COMPLETED").length;
       const avgProgress = enrolled > 0 ? Math.round(c.enrollments.reduce((s, e) => s + e.progress, 0) / enrolled) : 0;
-
       const allScores = c.assessments.flatMap(a => a.submissions.filter(s => s.score !== null).map(s => s.score!));
       const avgScore = allScores.length > 0 ? Math.round(allScores.reduce((a, b) => a + b, 0) / allScores.length) : null;
       const totalSubmissions = c.assessments.reduce((s, a) => s + a.submissions.length, 0);
 
       return {
-        courseId: c.id,
-        courseTitle: c.title,
-        enrolled,
-        active,
-        completed,
-        avgProgress,
-        avgScore,
-        totalSubmissions,
+        courseId: c.id, courseTitle: c.title, enrolled, active, completed, avgProgress, avgScore, totalSubmissions,
         modules: c.modules.map(m => ({ title: "M" + (m.order + 1) + ": " + m.title, sessions: m._count.lessons })),
       };
     });
