@@ -250,4 +250,38 @@ router.post("/:id/enroll", authenticate, async (req: Request, res: Response) => 
   }
 });
 
+// ─── ADD THIS ROUTE to src/routes/courses.ts ────────────────
+// Place it before the `export default router;` line
+
+// POST /api/courses/:id/admin-enroll — Admin direct enrollment
+router.post("/:id/admin-enroll", authenticate, async (req: Request, res: Response) => {
+  try {
+    if (req.user!.role !== "ADMIN") {
+      res.status(403).json({ error: "Admin access required" });
+      return;
+    }
+
+    const courseId = req.params.id;
+    const userId = req.user!.userId;
+
+    const course = await prisma.course.findUnique({ where: { id: courseId } });
+    if (!course) { res.status(404).json({ error: "Course not found" }); return; }
+
+    const existing = await prisma.enrollment.findUnique({
+      where: { userId_courseId: { userId, courseId } },
+    });
+    if (existing) { res.status(409).json({ error: "Already enrolled" }); return; }
+
+    const enrollment = await prisma.enrollment.create({
+      data: { userId, courseId, courseAccessId: "ADMIN-BYPASS", status: "ACTIVE" },
+      include: { course: { select: { title: true } } },
+    });
+
+    res.status(201).json({
+      message: "Enrolled in " + enrollment.course.title,
+      enrollment: { id: enrollment.id, courseId, progress: 0, status: "ACTIVE" },
+    });
+  } catch (err) { console.error("Admin enroll:", err); res.status(500).json({ error: "Enrollment failed" }); }
+});
+
 export default router;
