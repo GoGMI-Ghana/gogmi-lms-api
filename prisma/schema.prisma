@@ -71,7 +71,7 @@ model User {
   createdAt      DateTime      @default(now()) @map("created_at")
   updatedAt      DateTime      @updatedAt @map("updated_at")
 
-  
+
   instructorCourses Course[] @relation("instructorCourses")
 
   refreshTokens     RefreshToken[]
@@ -342,6 +342,7 @@ model Discussion {
   createdAt DateTime          @default(now()) @map("created_at")
   course    Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
   user      User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pinned    Boolean  @default(false)
   replies   DiscussionReply[]
   @@index([courseId])
   @@map("discussions")

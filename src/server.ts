@@ -10,6 +10,8 @@ import adminRoutes from "./routes/admin";
 import courseRoutes from "./routes/courses";
 import instructorRoutes from "./routes/instructor";
 import assessmentRoutes from "./routes/assessments";
+import discussionRoutes from "./routes/discussions";
+
 
 
 const app = express();
@@ -36,6 +38,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/courses", courseRoutes);
 app.use("/api/instructor", instructorRoutes);
 app.use("/api/assessments", assessmentRoutes);
+app.use("/api/discussions", discussionRoutes);
 
 
 app.get("/api/health", (_req, res) => { res.json({ status: "ok", timestamp: new Date().toISOString() }); });
