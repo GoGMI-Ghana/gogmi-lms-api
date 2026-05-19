@@ -278,6 +278,20 @@ router.post("/users/:id/unlock", async (req: Request, res: Response) => {
   }
 });
 
+
+// GET /api/admin/users — All users
+router.get("/users", async (_req, res) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: { id: true, firstName: true, lastName: true, email: true, phone: true, organization: true, country: true, role: true, status: true, jobTitle: true, bio: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(users);
+  } catch (err) { console.error(err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+
+
 // ─── POST /api/admin/users/:id/reset-password ───────────────
 router.post("/users/:id/reset-password", async (req: Request, res: Response) => {
   try {
