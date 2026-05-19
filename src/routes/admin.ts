@@ -5,6 +5,8 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate, authorize } from "../middleware/auth";
 import { logAudit } from "../lib/audit";
+import { sendEmail, instructorApprovalEmail } from "../lib/email";
+import { env } from "../config/env";
 
 const router = Router();
 
@@ -304,6 +306,33 @@ router.post("/users/:id/reset-password", async (req: Request, res: Response) => 
     console.error("Reset password error:", err);
     res.status(500).json({ error: "An error occurred" });
   }
+});
+
+router.get("/pending-instructors", async (_req, res) => {
+  try {
+    const pending = await prisma.user.findMany({ where: { role: "INSTRUCTOR", status: "PENDING" }, select: { id: true, firstName: true, lastName: true, email: true, phone: true, organization: true, country: true, jobTitle: true, bio: true, createdAt: true }, orderBy: { createdAt: "desc" } });
+    res.json(pending);
+  } catch (err) { console.error(err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+router.patch("/users/:id/approve", async (req, res) => {
+  try {
+    const { courseIds } = req.body;
+    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    await prisma.user.update({ where: { id: req.params.id }, data: { status: "ACTIVE" } });
+    if (courseIds && Array.isArray(courseIds) && courseIds.length > 0) { for (const cid of courseIds) { await prisma.course.update({ where: { id: cid }, data: { instructorId: req.params.id } }); } }
+    if (env.MS_CLIENT_ID && env.MS_SENDER_EMAIL) {
+      const titles = courseIds?.length > 0 ? (await prisma.course.findMany({ where: { id: { in: courseIds } }, select: { title: true } })).map(c => c.title) : [];
+      sendEmail({ to: user.email, subject: "GoGMI — Your Instructor Application Has Been Approved!", html: instructorApprovalEmail(user.firstName, titles) }).catch(e => console.error(e));
+    }
+    res.json({ message: user.firstName + " approved." });
+  } catch (err) { console.error(err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+router.patch("/users/:id/reject", async (req, res) => {
+  try { await prisma.user.update({ where: { id: req.params.id }, data: { status: "SUSPENDED" } }); res.json({ message: "Rejected." }); }
+  catch (err) { res.status(500).json({ error: "An error occurred" }); }
 });
 
 export default router;
