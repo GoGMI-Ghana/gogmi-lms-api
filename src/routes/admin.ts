@@ -1,352 +1,211 @@
 import { Router, type Request, type Response } from "express";
-import bcrypt from "bcrypt";
-import crypto from "crypto";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import { authenticate, authorize } from "../middleware/auth";
-import { logAudit } from "../lib/audit";
 import { sendEmail, instructorApprovalEmail } from "../lib/email";
 import { env } from "../config/env";
 
 const router = Router();
-
-// All admin routes require authentication + ADMIN role
 router.use(authenticate, authorize("ADMIN"));
 
-const BCRYPT_SALT_ROUNDS = 12;
-
-// ─── Validation ─────────────────────────────────────────────
-const createUserSchema = z.object({
-  email: z.string().email().max(255),
-  firstName: z.string().min(1).max(100),
-  lastName: z.string().min(1).max(100),
-  role: z.enum(["STUDENT", "INSTRUCTOR", "ADMIN"]),
-  organization: z.string().max(200).optional(),
-  phone: z.string().max(20).optional(),
-  jobTitle: z.string().max(100).optional(),
-  country: z.string().max(100).optional(),
-});
-
-const updateUserSchema = z.object({
-  firstName: z.string().min(1).max(100).optional(),
-  lastName: z.string().min(1).max(100).optional(),
-  role: z.enum(["STUDENT", "INSTRUCTOR", "ADMIN"]).optional(),
-  organization: z.string().max(200).optional(),
-  phone: z.string().max(20).optional(),
-  jobTitle: z.string().max(100).optional(),
-  country: z.string().max(100).optional(),
-  status: z.enum(["ACTIVE", "SUSPENDED", "PENDING"]).optional(),
-});
-
-// ─── POST /api/admin/users — Create user ────────────────────
-router.post("/users", async (req: Request, res: Response) => {
+// ─── GET /api/admin/overview — Dashboard stats ─────────────
+router.get("/overview", async (_req: Request, res: Response) => {
   try {
-    const parsed = createUserSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.errors[0].message });
-      return;
-    }
-
-    const data = parsed.data;
-    const email = data.email.toLowerCase();
-
-    // Check for duplicate email
-    const existing = await prisma.user.findUnique({ where: { email } });
-    if (existing) {
-      res.status(409).json({ error: "A user with this email already exists" });
-      return;
-    }
-
-    // Generate a secure temporary password
-    const tempPassword = crypto.randomBytes(12).toString("base64url");
-    const hashedPassword = await bcrypt.hash(tempPassword, BCRYPT_SALT_ROUNDS);
-
-    const user = await prisma.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        firstName: data.firstName,
-        lastName: data.lastName,
-        role: data.role,
-        organization: data.organization,
-        phone: data.phone,
-        jobTitle: data.jobTitle,
-        country: data.country,
-        status: "ACTIVE",
-      },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        status: true,
-        organization: true,
-        createdAt: true,
-      },
-    });
-
-    await logAudit("ACCOUNT_CREATED", req, user.id, `Created by admin ${req.user!.userId}`);
-
-    // TODO: Send email with temporary password
-    // In production, integrate with an email service (SendGrid, AWS SES, etc.)
-    // For now, return the temp password so the admin can share it manually
-
-    res.status(201).json({
-      user,
-      temporaryPassword: tempPassword,
-      message: "User created. Share the temporary password securely — the user must change it on first login.",
-    });
-  } catch (err) {
-    console.error("Create user error:", err);
-    res.status(500).json({ error: "An error occurred" });
-  }
-});
-
-// ─── GET /api/admin/users — List users ──────────────────────
-router.get("/users", async (req: Request, res: Response) => {
-  try {
-    const { search, role, status, page = "1", limit = "20" } = req.query;
-
-    const where: Record<string, unknown> = {};
-
-    if (search && typeof search === "string") {
-      where.OR = [
-        { firstName: { contains: search, mode: "insensitive" } },
-        { lastName: { contains: search, mode: "insensitive" } },
-        { email: { contains: search, mode: "insensitive" } },
-        { organization: { contains: search, mode: "insensitive" } },
-      ];
-    }
-
-    if (role && role !== "all") where.role = role;
-    if (status && status !== "all") where.status = status;
-
-    const pageNum = Math.max(1, parseInt(page as string));
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string)));
-    const skip = (pageNum - 1) * limitNum;
-
-    const [users, total] = await Promise.all([
-      prisma.user.findMany({
-        where,
-        select: {
-          id: true,
-          email: true,
-          firstName: true,
-          lastName: true,
-          role: true,
-          status: true,
-          organization: true,
-          jobTitle: true,
-          country: true,
-          lastLoginAt: true,
-          createdAt: true,
-          _count: { select: { enrollments: true } },
-        },
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: limitNum,
-      }),
-      prisma.user.count({ where }),
+    const [totalUsers, totalStudents, totalInstructors, pendingInstructors, totalCourses, totalEnrollments, activeEnrollments, completedEnrollments, totalSubmissions, pendingSubmissions] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { role: "STUDENT" } }),
+      prisma.user.count({ where: { role: "INSTRUCTOR" } }),
+      prisma.user.count({ where: { role: "INSTRUCTOR", status: "PENDING" } }),
+      prisma.course.count(),
+      prisma.enrollment.count(),
+      prisma.enrollment.count({ where: { status: "ACTIVE" } }),
+      prisma.enrollment.count({ where: { status: "COMPLETED" } }),
+      prisma.submission.count(),
+      prisma.submission.count({ where: { status: "SUBMITTED" } }),
     ]);
 
+    const recentUsers = await prisma.user.findMany({ select: { id: true, firstName: true, lastName: true, email: true, role: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 5 });
+    const recentEnrollments = await prisma.enrollment.findMany({ select: { enrolledAt: true, user: { select: { firstName: true, lastName: true } }, course: { select: { title: true } } }, orderBy: { enrolledAt: "desc" }, take: 5 });
+
     res.json({
-      users: users.map((u) => ({
-        ...u,
-        initials: `${u.firstName[0]}${u.lastName[0]}`.toUpperCase(),
-        enrolledCourses: u._count.enrollments,
-      })),
-      pagination: {
-        page: pageNum,
-        limit: limitNum,
-        total,
-        totalPages: Math.ceil(total / limitNum),
-      },
+      stats: { totalUsers, totalStudents, totalInstructors, pendingInstructors, totalCourses, totalEnrollments, activeEnrollments, completedEnrollments, totalSubmissions, pendingSubmissions },
+      recentUsers,
+      recentEnrollments: recentEnrollments.map(e => ({ student: e.user.firstName + " " + e.user.lastName, course: e.course.title, enrolledAt: e.enrolledAt })),
     });
-  } catch (err) {
-    console.error("List users error:", err);
-    res.status(500).json({ error: "An error occurred" });
-  }
+  } catch (err) { console.error("Admin overview:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-// ─── GET /api/admin/users/:id ───────────────────────────────
-router.get("/users/:id", async (req: Request, res: Response) => {
-  try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.params.id },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        status: true,
-        phone: true,
-        organization: true,
-        jobTitle: true,
-        country: true,
-        bio: true,
-        failedAttempts: true,
-        lockedUntil: true,
-        lastLoginAt: true,
-        lastLoginIp: true,
-        createdAt: true,
-        updatedAt: true,
-        enrollments: {
-          select: {
-            id: true,
-            courseId: true,
-            status: true,
-            progress: true,
-            enrolledAt: true,
-            course: { select: { title: true } },
-          },
-        },
-        certificates: true,
-        cpdRecords: true,
-      },
-    });
-
-    if (!user) {
-      res.status(404).json({ error: "User not found" });
-      return;
-    }
-
-    res.json(user);
-  } catch (err) {
-    console.error("Get user error:", err);
-    res.status(500).json({ error: "An error occurred" });
-  }
-});
-
-// ─── PATCH /api/admin/users/:id ─────────────────────────────
-router.patch("/users/:id", async (req: Request, res: Response) => {
-  try {
-    const parsed = updateUserSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: parsed.error.errors[0].message });
-      return;
-    }
-
-    // Prevent admin from changing their own role
-    if (req.params.id === req.user!.userId && parsed.data.role) {
-      res.status(400).json({ error: "You cannot change your own role" });
-      return;
-    }
-
-    const user = await prisma.user.update({
-      where: { id: req.params.id },
-      data: parsed.data,
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        status: true,
-        organization: true,
-      },
-    });
-
-    const action = parsed.data.status === "SUSPENDED" ? "ACCOUNT_SUSPENDED"
-      : parsed.data.status === "ACTIVE" ? "ACCOUNT_ACTIVATED"
-      : "ACCOUNT_UPDATED";
-
-    await logAudit(action, req, user.id, `Updated by admin ${req.user!.userId}`);
-
-    res.json(user);
-  } catch (err) {
-    console.error("Update user error:", err);
-    res.status(500).json({ error: "An error occurred" });
-  }
-});
-
-// ─── POST /api/admin/users/:id/unlock ───────────────────────
-router.post("/users/:id/unlock", async (req: Request, res: Response) => {
-  try {
-    await prisma.user.update({
-      where: { id: req.params.id },
-      data: { failedAttempts: 0, lockedUntil: null },
-    });
-
-    await logAudit("ACCOUNT_UNLOCKED", req, req.params.id, `Unlocked by admin ${req.user!.userId}`);
-
-    res.json({ message: "Account unlocked" });
-  } catch (err) {
-    console.error("Unlock error:", err);
-    res.status(500).json({ error: "An error occurred" });
-  }
-});
-
-
-// GET /api/admin/users — All users
-router.get("/users", async (_req, res) => {
+// ─── GET /api/admin/users — List all users ──────────────────
+router.get("/users", async (_req: Request, res: Response) => {
   try {
     const users = await prisma.user.findMany({
       select: { id: true, firstName: true, lastName: true, email: true, phone: true, organization: true, country: true, role: true, status: true, jobTitle: true, bio: true, createdAt: true },
       orderBy: { createdAt: "desc" },
     });
     res.json(users);
-  } catch (err) { console.error(err); res.status(500).json({ error: "An error occurred" }); }
+  } catch (err) { console.error("Admin users:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
+// ─── GET /api/admin/users/:id ───────────────────────────────
+router.get("/users/:id", async (req: Request, res: Response) => {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: req.params.id }, select: { id: true, firstName: true, lastName: true, email: true, phone: true, organization: true, country: true, role: true, status: true, jobTitle: true, bio: true, createdAt: true, lastLoginAt: true } });
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+    res.json(user);
+  } catch (err) { res.status(500).json({ error: "An error occurred" }); }
+});
 
+// ─── POST /api/admin/users — Create user ────────────────────
+router.post("/users", async (req: Request, res: Response) => {
+  try {
+    const { email, password, firstName, lastName, role } = req.body;
+    const bcrypt = require("bcrypt");
+    const hash = await bcrypt.hash(password, 12);
+    const user = await prisma.user.create({ data: { email, password: hash, firstName, lastName, role: role || "STUDENT", status: "ACTIVE" } });
+    res.status(201).json({ id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName, role: user.role });
+  } catch (err: any) {
+    if (err.code === "P2002") { res.status(409).json({ error: "Email already exists" }); return; }
+    console.error(err); res.status(500).json({ error: "An error occurred" });
+  }
+});
+
+// ─── PATCH /api/admin/users/:id — Update user ──────────────
+router.patch("/users/:id", async (req: Request, res: Response) => {
+  try {
+    const data: Record<string, unknown> = {};
+    if (req.body.firstName) data.firstName = req.body.firstName;
+    if (req.body.lastName) data.lastName = req.body.lastName;
+    if (req.body.role) data.role = req.body.role;
+    if (req.body.status) data.status = req.body.status;
+    if (req.body.organization) data.organization = req.body.organization;
+    const user = await prisma.user.update({ where: { id: req.params.id }, data });
+    res.json({ message: "Updated", user: { id: user.id, firstName: user.firstName, lastName: user.lastName, role: user.role, status: user.status } });
+  } catch (err) { res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── POST /api/admin/users/:id/unlock ───────────────────────
+router.post("/users/:id/unlock", async (req: Request, res: Response) => {
+  try {
+    await prisma.user.update({ where: { id: req.params.id }, data: { failedAttempts: 0, lockedUntil: null } });
+    res.json({ message: "Account unlocked" });
+  } catch (err) { res.status(500).json({ error: "An error occurred" }); }
+});
 
 // ─── POST /api/admin/users/:id/reset-password ───────────────
 router.post("/users/:id/reset-password", async (req: Request, res: Response) => {
   try {
-    const tempPassword = crypto.randomBytes(12).toString("base64url");
-    const hashedPassword = await bcrypt.hash(tempPassword, BCRYPT_SALT_ROUNDS);
-
-    await prisma.user.update({
-      where: { id: req.params.id },
-      data: {
-        password: hashedPassword,
-        failedAttempts: 0,
-        lockedUntil: null,
-      },
-    });
-
-    // Revoke all sessions for this user
-    await prisma.refreshToken.deleteMany({ where: { userId: req.params.id } });
-
-    await logAudit("PASSWORD_CHANGE", req, req.params.id, `Reset by admin ${req.user!.userId}`);
-
-    res.json({
-      temporaryPassword: tempPassword,
-      message: "Password reset. Share the new temporary password securely.",
-    });
-  } catch (err) {
-    console.error("Reset password error:", err);
-    res.status(500).json({ error: "An error occurred" });
-  }
+    const { password } = req.body;
+    if (!password || password.length < 8) { res.status(400).json({ error: "Password must be at least 8 characters" }); return; }
+    const bcrypt = require("bcrypt");
+    const hash = await bcrypt.hash(password, 12);
+    await prisma.user.update({ where: { id: req.params.id }, data: { password: hash, failedAttempts: 0, lockedUntil: null } });
+    res.json({ message: "Password reset" });
+  } catch (err) { res.status(500).json({ error: "An error occurred" }); }
 });
 
-router.get("/pending-instructors", async (_req, res) => {
-  try {
-    const pending = await prisma.user.findMany({ where: { role: "INSTRUCTOR", status: "PENDING" }, select: { id: true, firstName: true, lastName: true, email: true, phone: true, organization: true, country: true, jobTitle: true, bio: true, createdAt: true }, orderBy: { createdAt: "desc" } });
-    res.json(pending);
-  } catch (err) { console.error(err); res.status(500).json({ error: "An error occurred" }); }
-});
-
-router.patch("/users/:id/approve", async (req, res) => {
+// ─── PATCH /api/admin/users/:id/approve — Approve instructor ─
+router.patch("/users/:id/approve", async (req: Request, res: Response) => {
   try {
     const { courseIds } = req.body;
     const user = await prisma.user.findUnique({ where: { id: req.params.id } });
     if (!user) { res.status(404).json({ error: "User not found" }); return; }
     await prisma.user.update({ where: { id: req.params.id }, data: { status: "ACTIVE" } });
-    if (courseIds && Array.isArray(courseIds) && courseIds.length > 0) { for (const cid of courseIds) { await prisma.course.update({ where: { id: cid }, data: { instructorId: req.params.id } }); } }
+    if (courseIds && Array.isArray(courseIds) && courseIds.length > 0) {
+      for (const cid of courseIds) { await prisma.course.update({ where: { id: cid }, data: { instructorId: req.params.id } }); }
+    }
     if (env.MS_CLIENT_ID && env.MS_SENDER_EMAIL) {
-      const titles = courseIds?.length > 0 ? (await prisma.course.findMany({ where: { id: { in: courseIds } }, select: { title: true } })).map(c => c.title) : [];
-      sendEmail({ to: user.email, subject: "GoGMI — Your Instructor Application Has Been Approved!", html: instructorApprovalEmail(user.firstName, titles) }).catch(e => console.error(e));
+      const titles = courseIds?.length > 0 ? (await prisma.course.findMany({ where: { id: { in: courseIds } }, select: { title: true } })).map((c: any) => c.title) : [];
+      sendEmail({ to: user.email, subject: "GoGMI — Your Instructor Application Has Been Approved!", html: instructorApprovalEmail(user.firstName, titles) }).catch((e: any) => console.error(e));
     }
     res.json({ message: user.firstName + " approved." });
   } catch (err) { console.error(err); res.status(500).json({ error: "An error occurred" }); }
 });
 
-router.patch("/users/:id/reject", async (req, res) => {
-  try { await prisma.user.update({ where: { id: req.params.id }, data: { status: "SUSPENDED" } }); res.json({ message: "Rejected." }); }
+// ─── PATCH /api/admin/users/:id/reject ──────────────────────
+router.patch("/users/:id/reject", async (_req: Request, res: Response) => {
+  try { await prisma.user.update({ where: { id: _req.params.id }, data: { status: "SUSPENDED" } }); res.json({ message: "Rejected." }); }
   catch (err) { res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── GET /api/admin/courses — All courses with stats ────────
+router.get("/courses", async (_req: Request, res: Response) => {
+  try {
+    const courses = await prisma.course.findMany({
+      select: {
+        id: true, title: true, category: true, level: true, published: true, price: true, currency: true, duration: true,
+        thumbnailCode: true, thumbnailColor: true,
+        _count: { select: { enrollments: true, assessments: true, modules: true } },
+        instructor: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    res.json(courses.map((c: any) => ({
+      ...c, price: Number(c.price),
+      students: c._count.enrollments, assessments: c._count.assessments, modules: c._count.modules,
+      instructor: c.instructor ? c.instructor.firstName + " " + c.instructor.lastName : null,
+    })));
+  } catch (err) { console.error("Admin courses:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── PATCH /api/admin/courses/:id — Update course ───────────
+router.patch("/courses/:id", async (req: Request, res: Response) => {
+  try {
+    const data: Record<string, unknown> = {};
+    if (req.body.published !== undefined) data.published = req.body.published;
+    if (req.body.price !== undefined) data.price = req.body.price;
+    if (req.body.featured !== undefined) data.featured = req.body.featured;
+    const course = await prisma.course.update({ where: { id: req.params.id }, data });
+    res.json({ message: "Course updated", course: { id: course.id, title: course.title, published: course.published } });
+  } catch (err) { res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── GET /api/admin/enrollments — All enrollments ───────────
+router.get("/enrollments", async (_req: Request, res: Response) => {
+  try {
+    const enrollments = await prisma.enrollment.findMany({
+      select: {
+        id: true, progress: true, status: true, enrolledAt: true, courseAccessId: true,
+        user: { select: { id: true, firstName: true, lastName: true, email: true, organization: true, country: true } },
+        course: { select: { id: true, title: true } },
+      },
+      orderBy: { enrolledAt: "desc" },
+    });
+    res.json(enrollments.map((e: any) => ({
+      id: e.id, student: e.user.firstName + " " + e.user.lastName, email: e.user.email,
+      organization: e.user.organization, country: e.user.country,
+      course: e.course.title, courseId: e.course.id,
+      progress: e.progress, status: e.status, enrolledAt: e.enrolledAt, certificateId: e.courseAccessId,
+    })));
+  } catch (err) { console.error("Admin enrollments:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── GET /api/admin/announcements — All announcements ───────
+router.get("/announcements", async (_req: Request, res: Response) => {
+  try {
+    const announcements = await prisma.announcement.findMany({ orderBy: { createdAt: "desc" } });
+    res.json(announcements);
+  } catch (err) { res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── POST /api/admin/announcements — Create announcement ────
+router.post("/announcements", async (req: Request, res: Response) => {
+  try {
+    const { courseId, title, content } = req.body;
+    if (!title || !content) { res.status(400).json({ error: "Title and content required" }); return; }
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId }, select: { firstName: true, lastName: true } });
+    const announcement = await prisma.announcement.create({
+      data: { courseId: courseId || null, title, content, audience: courseId ? "course" : "all", author: user ? user.firstName + " " + user.lastName : "Admin" },
+    });
+    res.status(201).json(announcement);
+  } catch (err) { console.error(err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── DELETE /api/admin/announcements/:id ────────────────────
+router.delete("/announcements/:id", async (req: Request, res: Response) => {
+  try {
+    await prisma.announcement.delete({ where: { id: req.params.id } });
+    res.json({ message: "Deleted" });
+  } catch (err) { res.status(500).json({ error: "An error occurred" }); }
 });
 
 export default router;
