@@ -12,7 +12,7 @@ import instructorRoutes from "./routes/instructor";
 import assessmentRoutes from "./routes/assessments";
 import discussionRoutes from "./routes/discussions";
 import messageRoutes from "./routes/messages";
-
+import fileRoutes from "./routes/files";
 
 
 const app = express();
@@ -41,6 +41,7 @@ app.use("/api/instructor", instructorRoutes);
 app.use("/api/assessments", assessmentRoutes);
 app.use("/api/discussions", discussionRoutes);
 app.use("/api/messages", messageRoutes);
+app.use("/api/files", fileRoutes);
 
 
 app.get("/api/health", (_req, res) => { res.json({ status: "ok", timestamp: new Date().toISOString() }); });
