@@ -61,6 +61,35 @@ router.get("/dashboard/student", authenticate, async (req: Request, res: Respons
       orderBy: { enrolledAt: "desc" },
     });
 
+
+    // ─── ADD THESE ROUTES to src/routes/courses.ts ───────────────
+// Place them AFTER the /dashboard/student route and BEFORE /:id routes
+
+// GET /api/courses/student/assessments — Student's assessments
+router.get("/student/assessments", authenticate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const courseIds = (await prisma.enrollment.findMany({ where: { userId }, select: { courseId: true } })).map(e => e.courseId);
+
+    const assessments = await prisma.assessment.findMany({
+      where: { courseId: { in: courseIds } },
+      select: { id: true, title: true, type: true, dueDate: true, maxScore: true, courseId: true, course: { select: { title: true } }, submissions: { where: { userId }, select: { status: true, score: true, submittedAt: true } } },
+      orderBy: { dueDate: "asc" },
+    });
+
+    res.json(assessments.map(a => {
+      const sub = a.submissions[0];
+      return {
+        id: a.id, title: a.title, type: a.type, dueDate: a.dueDate, maxScore: a.maxScore,
+        course: a.course.title, courseId: a.courseId,
+        status: sub ? sub.status : "NOT_SUBMITTED",
+        score: sub?.score ?? null,
+        submittedAt: sub?.submittedAt ?? null,
+      };
+    }));
+  } catch (err) { console.error("Student assessments:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
     const courseIds = enrollments.map(e => e.courseId);
 
     const upcomingAssessments = await prisma.assessment.findMany({

@@ -308,4 +308,44 @@ router.get("/me", authenticate, async (req: Request, res: Response) => {
   } catch (err) { res.status(500).json({ error: "An error occurred" }); }
 });
 
+
+// ─── ADD THESE ROUTES to src/routes/auth.ts before export default router ───
+
+// PATCH /api/auth/profile — Update own profile
+router.patch("/profile", authenticate, async (req: Request, res: Response) => {
+  try {
+    const data: Record<string, string> = {};
+    if (req.body.firstName) data.firstName = req.body.firstName;
+    if (req.body.lastName) data.lastName = req.body.lastName;
+    if (req.body.phone !== undefined) data.phone = req.body.phone;
+    if (req.body.organization !== undefined) data.organization = req.body.organization;
+    if (req.body.country !== undefined) data.country = req.body.country;
+
+    await prisma.user.update({ where: { id: req.user!.userId }, data });
+    res.json({ message: "Profile updated" });
+  } catch (err) { console.error("Update profile:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// POST /api/auth/change-password — Change own password
+router.post("/change-password", authenticate, async (req: Request, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) { res.status(400).json({ error: "Both passwords required" }); return; }
+    if (newPassword.length < 8) { res.status(400).json({ error: "Password must be at least 8 characters" }); return; }
+
+    const user = await prisma.user.findUnique({ where: { id: req.user!.userId } });
+    if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+    const bcrypt = require("bcrypt");
+    const valid = await bcrypt.compare(currentPassword, user.password);
+    if (!valid) { res.status(403).json({ error: "Current password is incorrect" }); return; }
+
+    const hash = await bcrypt.hash(newPassword, 12);
+    await prisma.user.update({ where: { id: req.user!.userId }, data: { password: hash } });
+    res.json({ message: "Password changed" });
+  } catch (err) { console.error("Change password:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+
+
 export default router;
