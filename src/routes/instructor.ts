@@ -12,20 +12,30 @@ router.use(authenticate, authorize("INSTRUCTOR", "ADMIN"));
 router.get("/dashboard", async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    const courses = await prisma.course.findMany({ where: { instructorId: userId }, select: { id: true, title: true, thumbnailCode: true, thumbnailColor: true, thumbnailImage: true, _count: { select: { enrollments: true } }, enrollments: { select: { progress: true, lastAccessAt: true, status: true } } } });
-    let effectiveCourses = courses;
-    if (courses.length === 0 && req.user!.role === "ADMIN") { effectiveCourses = await prisma.course.findMany({ where: { published: true }, select: { id: true, title: true, thumbnailCode: true, thumbnailColor: true, thumbnailImage: true, _count: { select: { enrollments: true } }, enrollments: { select: { progress: true, lastAccessAt: true, status: true } } } }); }
-    const courseIds = effectiveCourses.map(c => c.id);
-    const totalStudents = effectiveCourses.reduce((sum, c) => sum + c._count.enrollments, 0);
-    const allProgress = effectiveCourses.flatMap(c => c.enrollments.map(e => e.progress));
+
+    // Get course IDs from both direct assignment AND approved applications
+    const approvedApps = await prisma.courseInstructorApplication.findMany({
+      where: { userId, status: "APPROVED" },
+      select: { courseId: true },
+    });
+    const approvedCourseIds = approvedApps.map(a => a.courseId);
+
+    let courseWhere: Record<string, unknown> = req.user!.role === "ADMIN"
+      ? { published: true }
+      : { OR: [{ instructorId: userId }, { id: { in: approvedCourseIds } }] };
+
+    const courses = await prisma.course.findMany({ where: courseWhere, select: { id: true, title: true, thumbnailCode: true, thumbnailColor: true, thumbnailImage: true, _count: { select: { enrollments: true } }, enrollments: { select: { progress: true, lastAccessAt: true, status: true } } } });
+    const courseIds = courses.map(c => c.id);
+    const totalStudents = courses.reduce((sum, c) => sum + c._count.enrollments, 0);
+    const allProgress = courses.flatMap(c => c.enrollments.map(e => e.progress));
     const avgProgress = allProgress.length > 0 ? Math.round(allProgress.reduce((a, b) => a + b, 0) / allProgress.length) : 0;
     const pendingSubmissions = await prisma.submission.findMany({ where: { assessment: { courseId: { in: courseIds } }, status: "SUBMITTED" }, select: { id: true, submittedAt: true, user: { select: { firstName: true, lastName: true, email: true } }, assessment: { select: { title: true, type: true, course: { select: { title: true } } } } }, orderBy: { submittedAt: "desc" }, take: 10 });
     const upcomingAssessments = await prisma.assessment.findMany({ where: { courseId: { in: courseIds }, dueDate: { gte: new Date() } }, select: { id: true, title: true, type: true, dueDate: true, course: { select: { title: true } } }, orderBy: { dueDate: "asc" }, take: 5 });
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const activeLearners = await prisma.enrollment.count({ where: { courseId: { in: courseIds }, lastAccessAt: { gte: sevenDaysAgo } } });
     res.json({
-      stats: { totalCourses: effectiveCourses.length, totalStudents, pendingGrades: pendingSubmissions.length, avgProgress, activeLearners },
-      courses: effectiveCourses.map(c => ({ id: c.id, title: c.title, thumbnailCode: c.thumbnailCode, thumbnailColor: c.thumbnailColor, thumbnailImage: c.thumbnailImage, students: c._count.enrollments })),
+      stats: { totalCourses: courses.length, totalStudents, pendingGrades: pendingSubmissions.length, avgProgress, activeLearners },
+      courses: courses.map(c => ({ id: c.id, title: c.title, thumbnailCode: c.thumbnailCode, thumbnailColor: c.thumbnailColor, thumbnailImage: c.thumbnailImage, students: c._count.enrollments })),
       pendingSubmissions: pendingSubmissions.map(s => ({ id: s.id, student: s.user.firstName + " " + s.user.lastName, email: s.user.email, assignment: s.assessment.title, type: s.assessment.type, course: s.assessment.course.title, submittedAt: s.submittedAt })),
       upcomingAssessments: upcomingAssessments.map(a => ({ id: a.id, title: a.title, type: a.type, dueDate: a.dueDate, course: a.course.title })),
     });
@@ -36,9 +46,19 @@ router.get("/dashboard", async (req: Request, res: Response) => {
 router.get("/courses", async (req: Request, res: Response) => {
   try {
     const userId = req.user!.userId;
-    let where: Record<string, unknown> = { instructorId: userId };
-    if (req.user!.role === "ADMIN") where = { published: true };
-    const courses = await prisma.course.findMany({ where, select: { id: true, title: true, subtitle: true, category: true, level: true, duration: true, thumbnailCode: true, thumbnailColor: true, thumbnailImage: true, published: true, price: true, currency: true, modules: { select: { id: true, title: true, order: true, _count: { select: { lessons: true } } }, orderBy: { order: "asc" } }, _count: { select: { enrollments: true, assessments: true } }, enrollments: { select: { progress: true } }, assessments: { select: { id: true, title: true, type: true, dueDate: true, maxScore: true, _count: { select: { submissions: true } }, submissions: { select: { status: true, score: true } } }, orderBy: { order: "asc" } } }, orderBy: { createdAt: "desc" } });
+
+    // Get course IDs from approved applications
+    const approvedApps = await prisma.courseInstructorApplication.findMany({
+      where: { userId, status: "APPROVED" },
+      select: { courseId: true },
+    });
+    const approvedCourseIds = approvedApps.map(a => a.courseId);
+
+    let where: Record<string, unknown> = req.user!.role === "ADMIN"
+      ? { published: true }
+      : { OR: [{ instructorId: userId }, { id: { in: approvedCourseIds } }] };
+
+    const courses = await prisma.course.findMany({ where, select: { id: true, title: true, subtitle: true, category: true, level: true, duration: true, thumbnailCode: true, thumbnailColor: true, thumbnailImage: true, published: true, price: true, currency: true, zoomLink: true, timetable: true, modules: { select: { id: true, title: true, order: true, _count: { select: { lessons: true } } }, orderBy: { order: "asc" } }, _count: { select: { enrollments: true, assessments: true } }, enrollments: { select: { progress: true } }, assessments: { select: { id: true, title: true, type: true, dueDate: true, maxScore: true, _count: { select: { submissions: true } }, submissions: { select: { status: true, score: true } } }, orderBy: { order: "asc" } } }, orderBy: { createdAt: "desc" } });
     res.json(courses.map(c => {
       const avgProgress = c.enrollments.length > 0 ? Math.round(c.enrollments.reduce((s, e) => s + e.progress, 0) / c.enrollments.length) : 0;
       return { ...c, students: c._count.enrollments, assessmentCount: c._count.assessments, totalSessions: c.modules.reduce((s, m) => s + m._count.lessons, 0), avgProgress, price: Number(c.price), enrollments: undefined, assessments: c.assessments.map(a => ({ id: a.id, title: a.title, type: a.type, dueDate: a.dueDate, maxScore: a.maxScore, submissions: a._count.submissions, totalStudents: c._count.enrollments, avgScore: a.submissions.filter(s => s.score !== null).length > 0 ? Math.round(a.submissions.filter(s => s.score !== null).reduce((sum, s) => sum + (s.score || 0), 0) / a.submissions.filter(s => s.score !== null).length) : null, pendingCount: a.submissions.filter(s => s.status === "SUBMITTED").length })) };
@@ -172,3 +192,45 @@ router.patch("/lessons/:id", async (req: Request, res: Response) => {
 });
 
 export default router;
+// ─── POST /api/instructor/courses/:id/apply — Apply to teach a course ────────
+router.post("/courses/:id/apply", async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const courseId = req.params.id;
+    const { message } = req.body;
+
+    const course = await prisma.course.findUnique({ where: { id: courseId }, select: { id: true, title: true } });
+    if (!course) { res.status(404).json({ error: "Course not found" }); return; }
+
+    const existing = await prisma.courseInstructorApplication.findUnique({
+      where: { courseId_userId: { courseId, userId } },
+    });
+    if (existing) {
+      res.status(409).json({ error: "You have already applied to this course", status: existing.status });
+      return;
+    }
+
+    const application = await prisma.courseInstructorApplication.create({
+      data: { courseId, userId, message: message || null },
+      select: { id: true, status: true, appliedAt: true },
+    });
+
+    res.status(201).json({ message: "Application submitted successfully", application });
+  } catch (err) { console.error("Apply to course:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── GET /api/instructor/my-applications — My applications ───────────────────
+router.get("/my-applications", async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const applications = await prisma.courseInstructorApplication.findMany({
+      where: { userId },
+      select: {
+        id: true, status: true, message: true, appliedAt: true, reviewedAt: true,
+        course: { select: { id: true, title: true, category: true, thumbnailCode: true, thumbnailColor: true } },
+      },
+      orderBy: { appliedAt: "desc" },
+    });
+    res.json(applications);
+  } catch (err) { console.error("My applications:", err); res.status(500).json({ error: "An error occurred" }); }
+});
