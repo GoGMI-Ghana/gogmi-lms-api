@@ -13,6 +13,7 @@ import assessmentRoutes from "./routes/assessments";
 import discussionRoutes from "./routes/discussions";
 import messageRoutes from "./routes/messages";
 import fileRoutes from "./routes/files";
+import groupRoutes from "./routes/groups";
 
 
 const app = express();
@@ -42,6 +43,7 @@ app.use("/api/assessments", assessmentRoutes);
 app.use("/api/discussions", discussionRoutes);
 app.use("/api/messages", messageRoutes);
 app.use("/api/files", fileRoutes);
+app.use("/api/groups", groupRoutes);
 
 
 app.get("/api/health", (_req, res) => { res.json({ status: "ok", timestamp: new Date().toISOString() }); });
