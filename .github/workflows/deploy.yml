@@ -24,6 +24,5 @@ jobs:
             npm ci
             npx prisma generate
             npx prisma db push --skip-generate
-            npm run build
-            pm2 reload "${{ secrets.PM2_APP_NAME }}" || pm2 start dist/server.js --name "${{ secrets.PM2_APP_NAME }}"
+            pm2 restart "${{ secrets.PM2_APP_NAME }}"
             pm2 save
