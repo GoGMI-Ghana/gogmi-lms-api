@@ -185,6 +185,11 @@ model CourseFacilitator {
   courseId  String  @map("course_id")
   name     String
   title    String?
+  bio      String?
+  email    String?
+  phone    String?
+  linkedIn String? @map("linkedin")
+  photo    String?
   order    Int     @default(0)
   course   Course  @relation(fields: [courseId], references: [id], onDelete: Cascade)
   @@map("course_facilitators")
