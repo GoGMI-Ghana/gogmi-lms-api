@@ -284,8 +284,8 @@ model Submission {
 model Certificate {
   id            String   @id @default(uuid())
   userId        String   @map("user_id")
-  courseTitle    String   @map("course_title")
-  certificateNo String   @unique @map("certificate_no")
+  courseTitle    String?  @map("course_title")
+  certificateNo String?  @unique @map("certificate_no")
   cpdPoints     Int      @default(0) @map("cpd_points")
   issuedAt      DateTime @default(now()) @map("issued_at")
   fileUrl       String?  @map("file_url")
