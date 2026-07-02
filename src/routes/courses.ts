@@ -160,7 +160,7 @@ router.get("/:id", async (req: Request, res: Response) => {
       where: { id: req.params.id },
       include: {
         tags: { select: { tag: true } },
-        facilitators: { select: { name: true, title: true }, orderBy: { order: "asc" } },
+        facilitators: { select: { name: true, title: true, bio: true, email: true, phone: true, linkedIn: true, photo: true }, orderBy: { order: "asc" } },
         outcomes: { select: { outcome: true }, orderBy: { order: "asc" } },
         modules: {
           select: { id: true, title: true, order: true,
