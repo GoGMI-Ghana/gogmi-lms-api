@@ -19,10 +19,6 @@ jobs:
           script: |
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
-            git fetch origin main
-            git reset --hard origin/main
-            npm ci
-            npx prisma generate
-            npx prisma db push --skip-generate
-            pm2 restart "${{ secrets.PM2_APP_NAME }}"
-            pm2 save
+            echo "=== INTROSPECTED SCHEMA START ==="
+            npx prisma db pull --print --schema=prisma/schema.prisma
+            echo "=== INTROSPECTED SCHEMA END ==="
