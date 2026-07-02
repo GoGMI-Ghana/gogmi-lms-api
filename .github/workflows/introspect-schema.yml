@@ -1,0 +1,22 @@
+name: Introspect live schema (diagnostic, temporary)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  introspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print live DB schema via prisma db pull
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            set -e
+            cd "${{ secrets.DEPLOY_PATH }}"
+            echo "=== INTROSPECTED SCHEMA START ==="
+            npx prisma db pull --print --schema=prisma/schema.prisma
+            echo "=== INTROSPECTED SCHEMA END ==="
