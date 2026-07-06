@@ -51,6 +51,12 @@ enum PaymentMethod {
   FREE
 }
 
+enum ApplicationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model User {
   id             String        @id @default(uuid())
   email          String        @unique
@@ -71,20 +77,23 @@ model User {
   createdAt      DateTime      @default(now()) @map("created_at")
   updatedAt      DateTime      @updatedAt @map("updated_at")
 
-
   instructorCourses Course[] @relation("instructorCourses")
 
-  refreshTokens     RefreshToken[]
-  enrollments       Enrollment[]
-  submissions       Submission[]
-  certificates      Certificate[]
-  payments          Payment[]
-  auditLogs         AuditLog[]
-  sentMessages      Message[]          @relation("sender")
-  receivedMessages  Message[]          @relation("receiver")
-  discussions       Discussion[]
-  discussionReplies DiscussionReply[]
-  cpdRecords        CpdRecord[]
+  refreshTokens                RefreshToken[]
+  enrollments                  Enrollment[]
+  submissions                  Submission[]
+  certificates                 Certificate[]
+  payments                     Payment[]
+  auditLogs                    AuditLog[]
+  sentMessages                 Message[]                    @relation("sender")
+  receivedMessages             Message[]                    @relation("recipient")
+  discussions                  Discussion[]
+  discussionReplies            DiscussionReply[]
+  cpdRecords                   CpdRecord[]
+  lessonCompletions            LessonCompletion[]
+  courseEvaluations            CourseEvaluation[]
+  courseInstructorApplications CourseInstructorApplication[]
+  studentGroupMemberships      StudentGroupMember[]
 
   @@map("users")
 }
@@ -140,16 +149,20 @@ model Course {
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
-  modules        Module[]
-  enrollments    Enrollment[]
-  assessments    Assessment[]
-  payments       Payment[]
-  tags           CourseTag[]
-  facilitators   CourseFacilitator[]
-  outcomes       CourseOutcome[]
-  announcements  Announcement[]
-  discussions    Discussion[]
-  accessCodes    CourseAccessCode[]
+  modules                       Module[]
+  enrollments                   Enrollment[]
+  assessments                   Assessment[]
+  payments                      Payment[]
+  tags                          CourseTag[]
+  facilitators                  CourseFacilitator[]
+  outcomes                      CourseOutcome[]
+  announcements                 Announcement[]
+  discussions                   Discussion[]
+  accessCodes                   CourseAccessCode[]
+  certificates                  Certificate[]
+  courseEvaluations             CourseEvaluation[]
+  courseInstructorApplications  CourseInstructorApplication[]
+  studentGroups                 StudentGroup[]
 
   @@map("courses")
 }
@@ -225,6 +238,7 @@ model Lesson {
   contentUrl  String? @map("content_url")
   order       Int     @default(0)
   module      Module  @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  completions LessonCompletion[]
   @@index([moduleId])
   @@map("lessons")
 }
@@ -249,16 +263,21 @@ model Enrollment {
 }
 
 model Assessment {
-  id          String         @id @default(uuid())
-  courseId     String         @map("course_id")
-  title       String
-  type        AssessmentType
-  dueDate     DateTime?      @map("due_date")
-  maxScore    Int            @default(100) @map("max_score")
-  order       Int            @default(0)
-  createdAt   DateTime       @default(now()) @map("created_at")
-  course      Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  submissions Submission[]
+  id              String         @id @default(uuid())
+  courseId        String         @map("course_id")
+  title           String
+  type            AssessmentType
+  dueDate         DateTime?      @map("due_date")
+  maxScore        Int            @default(100) @map("max_score")
+  order           Int            @default(0)
+  createdAt       DateTime       @default(now()) @map("created_at")
+  mode            String         @default("INDIVIDUAL")
+  groupId         String?        @map("group_id")
+  questionFileUrl String?        @map("question_file_url")
+  course          Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  group           StudentGroup?  @relation(fields: [groupId], references: [id])
+  questions       Question[]
+  submissions     Submission[]
   @@index([courseId])
   @@map("assessments")
 }
@@ -276,21 +295,22 @@ model Submission {
   createdAt    DateTime         @default(now()) @map("created_at")
   assessment   Assessment       @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
   user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers      StudentAnswer[]
   @@unique([assessmentId, userId])
   @@index([userId])
   @@map("submissions")
 }
 
 model Certificate {
-  id            String   @id @default(uuid())
-  userId        String   @map("user_id")
-  courseTitle    String?  @map("course_title")
-  certificateNo String?  @unique @map("certificate_no")
-  cpdPoints     Int      @default(0) @map("cpd_points")
-  issuedAt      DateTime @default(now()) @map("issued_at")
-  fileUrl       String?  @map("file_url")
-  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@index([userId])
+  id            String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  userId        String    @map("user_id")
+  courseId      String    @map("course_id")
+  fileUrl       String    @map("file_url")
+  availableFrom DateTime  @default(dbgenerated("'2026-05-28 09:00:00'::timestamp without time zone")) @map("available_from") @db.Timestamp(6)
+  createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
+  course        Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, courseId])
   @@map("certificates")
 }
 
@@ -365,16 +385,126 @@ model DiscussionReply {
 }
 
 model Message {
-  id         String   @id @default(uuid())
-  senderId   String   @map("sender_id")
-  receiverId String   @map("receiver_id")
-  content    String
-  read       Boolean  @default(false)
-  createdAt  DateTime @default(now()) @map("created_at")
-  sender     User     @relation("sender", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver   User     @relation("receiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  id        String    @id @default(uuid())
+  senderId  String    @map("sender_id")
+  recipientId String  @map("receiver_id")
+  content   String
+  read      Boolean   @default(false)
+  createdAt DateTime  @default(now()) @map("created_at")
+  parentId  String?   @map("parent_id")
+  subject   String?   @default("")
+  parent    Message?  @relation("messageThread", fields: [parentId], references: [id])
+  replies   Message[] @relation("messageThread")
+  sender    User      @relation("sender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipient User      @relation("recipient", fields: [recipientId], references: [id], onDelete: Cascade)
   @@index([senderId])
-  @@index([receiverId])
+  @@index([recipientId])
   @@index([createdAt])
   @@map("messages")
+}
+
+// ─── Course evaluations ──────────────────────────────────────
+model CourseEvaluation {
+  id          String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  userId      String    @map("user_id")
+  courseId    String    @map("course_id")
+  responses   Json
+  submittedAt DateTime? @default(now()) @map("submitted_at") @db.Timestamp(6)
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, courseId])
+  @@map("course_evaluations")
+}
+
+// ─── Instructor applications to teach a course ──────────────
+model CourseInstructorApplication {
+  id         String             @id @default(dbgenerated("(gen_random_uuid())::text"))
+  courseId   String             @map("course_id")
+  userId     String             @map("user_id")
+  status     ApplicationStatus  @default(PENDING)
+  message    String?
+  appliedAt  DateTime           @default(now()) @map("applied_at") @db.Timestamptz(6)
+  reviewedAt DateTime?          @map("reviewed_at") @db.Timestamptz(6)
+  course     Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([courseId, userId])
+  @@map("course_instructor_applications")
+}
+
+// ─── Per-user lesson completion tracking ────────────────────
+model LessonCompletion {
+  id          String    @id @default(dbgenerated("(gen_random_uuid())::text"))
+  userId      String    @map("user_id")
+  lessonId    String    @map("lesson_id")
+  completedAt DateTime? @default(now()) @map("completed_at") @db.Timestamp(6)
+  lesson      Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, lessonId])
+  @@index([userId], map: "idx_lesson_comp_user")
+  @@map("lesson_completions")
+}
+
+model Question {
+  id            String            @id @default(dbgenerated("(gen_random_uuid())::text"))
+  assessmentId  String            @map("assessment_id")
+  questionText  String            @map("question_text")
+  questionType  String            @default("MCQ") @map("question_type")
+  points        Int               @default(1)
+  order         Int               @default(0)
+  createdAt     DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
+  assessment    Assessment        @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  options       QuestionOption[]
+  studentAnswers StudentAnswer[]
+  @@index([assessmentId], map: "idx_questions_assessment")
+  @@map("questions")
+}
+
+model QuestionOption {
+  id             String           @id @default(dbgenerated("(gen_random_uuid())::text"))
+  questionId     String           @map("question_id")
+  optionText     String           @map("option_text")
+  isCorrect      Boolean          @default(false) @map("is_correct")
+  order          Int              @default(0)
+  question       Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  studentAnswers StudentAnswer[]
+  @@index([questionId], map: "idx_options_question")
+  @@map("question_options")
+}
+
+model StudentAnswer {
+  id               String          @id @default(dbgenerated("(gen_random_uuid())::text"))
+  submissionId     String          @map("submission_id")
+  questionId       String          @map("question_id")
+  selectedOptionId String?         @map("selected_option_id")
+  isCorrect        Boolean?        @default(false) @map("is_correct")
+  pointsEarned     Int?            @default(0) @map("points_earned")
+  question         Question        @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  selectedOption   QuestionOption? @relation(fields: [selectedOptionId], references: [id])
+  submission       Submission      @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  @@unique([submissionId, questionId])
+  @@index([submissionId], map: "idx_answers_submission")
+  @@map("student_answers")
+}
+
+model StudentGroupMember {
+  id             String        @id @default(dbgenerated("(gen_random_uuid())::text"))
+  groupId        String        @map("group_id")
+  userId         String        @map("user_id")
+  joinedAt       DateTime?     @default(now()) @map("joined_at") @db.Timestamp(6)
+  group          StudentGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([groupId, userId])
+  @@map("student_group_members")
+}
+
+model StudentGroup {
+  id          String                @id @default(dbgenerated("(gen_random_uuid())::text"))
+  courseId    String                @map("course_id")
+  name        String
+  createdAt   DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
+  assessments Assessment[]
+  members     StudentGroupMember[]
+  course      Course                @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  @@unique([courseId, name])
+  @@map("student_groups")
 }
