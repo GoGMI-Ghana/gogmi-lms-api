@@ -145,7 +145,7 @@ model Course {
   format         String?
   targetGroup    String?  @map("target_group")
   instructorId   String?  @map("instructor_id")
-  instructor     User?    @relation("instructorCourses", fields: [instructorId], references: [id])
+  instructor     User?    @relation("instructorCourses", fields: [instructorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
@@ -275,7 +275,7 @@ model Assessment {
   groupId         String?        @map("group_id")
   questionFileUrl String?        @map("question_file_url")
   course          Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  group           StudentGroup?  @relation(fields: [groupId], references: [id])
+  group           StudentGroup?  @relation(fields: [groupId], references: [id], onUpdate: NoAction)
   questions       Question[]
   submissions     Submission[]
   @@index([courseId])
@@ -308,8 +308,8 @@ model Certificate {
   fileUrl       String    @map("file_url")
   availableFrom DateTime  @default(dbgenerated("'2026-05-28 09:00:00'::timestamp without time zone")) @map("available_from") @db.Timestamp(6)
   createdAt     DateTime? @default(now()) @map("created_at") @db.Timestamp(6)
-  course        Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course        Course    @relation(fields: [courseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([userId, courseId])
   @@map("certificates")
 }
@@ -393,7 +393,7 @@ model Message {
   createdAt DateTime  @default(now()) @map("created_at")
   parentId  String?   @map("parent_id")
   subject   String?   @default("")
-  parent    Message?  @relation("messageThread", fields: [parentId], references: [id])
+  parent    Message?  @relation("messageThread", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   replies   Message[] @relation("messageThread")
   sender    User      @relation("sender", fields: [senderId], references: [id], onDelete: Cascade)
   recipient User      @relation("recipient", fields: [recipientId], references: [id], onDelete: Cascade)
@@ -410,8 +410,8 @@ model CourseEvaluation {
   courseId    String    @map("course_id")
   responses   Json
   submittedAt DateTime? @default(now()) @map("submitted_at") @db.Timestamp(6)
-  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course      Course    @relation(fields: [courseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([userId, courseId])
   @@map("course_evaluations")
 }
@@ -425,8 +425,8 @@ model CourseInstructorApplication {
   message    String?
   appliedAt  DateTime           @default(now()) @map("applied_at") @db.Timestamptz(6)
   reviewedAt DateTime?          @map("reviewed_at") @db.Timestamptz(6)
-  course     Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course     Course             @relation(fields: [courseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([courseId, userId])
   @@map("course_instructor_applications")
 }
@@ -437,8 +437,8 @@ model LessonCompletion {
   userId      String    @map("user_id")
   lessonId    String    @map("lesson_id")
   completedAt DateTime? @default(now()) @map("completed_at") @db.Timestamp(6)
-  lesson      Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson      Lesson    @relation(fields: [lessonId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([userId, lessonId])
   @@index([userId], map: "idx_lesson_comp_user")
   @@map("lesson_completions")
@@ -452,7 +452,7 @@ model Question {
   points        Int               @default(1)
   order         Int               @default(0)
   createdAt     DateTime?         @default(now()) @map("created_at") @db.Timestamp(6)
-  assessment    Assessment        @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  assessment    Assessment        @relation(fields: [assessmentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   options       QuestionOption[]
   studentAnswers StudentAnswer[]
   @@index([assessmentId], map: "idx_questions_assessment")
@@ -465,7 +465,7 @@ model QuestionOption {
   optionText     String           @map("option_text")
   isCorrect      Boolean          @default(false) @map("is_correct")
   order          Int              @default(0)
-  question       Question         @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  question       Question         @relation(fields: [questionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   studentAnswers StudentAnswer[]
   @@index([questionId], map: "idx_options_question")
   @@map("question_options")
@@ -478,9 +478,9 @@ model StudentAnswer {
   selectedOptionId String?         @map("selected_option_id")
   isCorrect        Boolean?        @default(false) @map("is_correct")
   pointsEarned     Int?            @default(0) @map("points_earned")
-  question         Question        @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  selectedOption   QuestionOption? @relation(fields: [selectedOptionId], references: [id])
-  submission       Submission      @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  question         Question        @relation(fields: [questionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  selectedOption   QuestionOption? @relation(fields: [selectedOptionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  submission       Submission      @relation(fields: [submissionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([submissionId, questionId])
   @@index([submissionId], map: "idx_answers_submission")
   @@map("student_answers")
@@ -491,8 +491,8 @@ model StudentGroupMember {
   groupId        String        @map("group_id")
   userId         String        @map("user_id")
   joinedAt       DateTime?     @default(now()) @map("joined_at") @db.Timestamp(6)
-  group          StudentGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group          StudentGroup  @relation(fields: [groupId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([groupId, userId])
   @@map("student_group_members")
 }
@@ -504,7 +504,7 @@ model StudentGroup {
   createdAt   DateTime?             @default(now()) @map("created_at") @db.Timestamp(6)
   assessments Assessment[]
   members     StudentGroupMember[]
-  course      Course                @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  course      Course                @relation(fields: [courseId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   @@unique([courseId, name])
   @@map("student_groups")
 }
