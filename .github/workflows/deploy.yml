@@ -19,6 +19,14 @@ jobs:
           script: |
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
-            echo "=== INTROSPECTED SCHEMA START ==="
-            npx prisma db pull --print --schema=prisma/schema.prisma
-            echo "=== INTROSPECTED SCHEMA END ==="
+            echo "=== GIT STATUS ==="
+            git status
+            echo "=== GIT LOG -5 ==="
+            git log --oneline -5
+            echo "=== GIT REFLOG -20 ==="
+            git reflog -20 || true
+            echo "=== ROUTE FILE LINE COUNTS ==="
+            wc -l src/routes/*.ts
+            echo "=== PM2 SHOW gogmi-api ==="
+            pm2 show gogmi-api
+            echo "=== DONE ==="
