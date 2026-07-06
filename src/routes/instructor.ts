@@ -69,7 +69,7 @@ router.get("/courses", async (req: Request, res: Response) => {
 // ─── GET /api/instructor/courses/:id ────────────────────────
 router.get("/courses/:id", async (req: Request, res: Response) => {
   try {
-    const course = await prisma.course.findUnique({ where: { id: req.params.id }, include: { modules: { select: { id: true, title: true, order: true, lessons: { select: { id: true, title: true, facilitator: true, duration: true, contentType: true, contentUrl: true, order: true }, orderBy: { order: "asc" } } }, orderBy: { order: "asc" } }, enrollments: { select: { id: true, progress: true, status: true, enrolledAt: true, lastAccessAt: true, user: { select: { id: true, firstName: true, lastName: true, email: true, organization: true, country: true } } }, orderBy: { enrolledAt: "desc" } }, assessments: { select: { id: true, title: true, type: true, dueDate: true, maxScore: true, _count: { select: { submissions: true } }, submissions: { select: { id: true, status: true, score: true } } }, orderBy: { order: "asc" } } } });
+    const course = await prisma.course.findUnique({ where: { id: req.params.id }, include: { modules: { select: { id: true, title: true, order: true, lessons: { select: { id: true, title: true, facilitator: true, duration: true, contentType: true, contentUrl: true, order: true }, orderBy: { order: "asc" } } }, orderBy: { order: "asc" } }, facilitators: { orderBy: { order: "asc" } }, enrollments: { select: { id: true, progress: true, status: true, enrolledAt: true, lastAccessAt: true, user: { select: { id: true, firstName: true, lastName: true, email: true, organization: true, country: true } } }, orderBy: { enrolledAt: "desc" } }, assessments: { select: { id: true, title: true, type: true, dueDate: true, maxScore: true, _count: { select: { submissions: true } }, submissions: { select: { id: true, status: true, score: true } } }, orderBy: { order: "asc" } } } });
     if (!course) { res.status(404).json({ error: "Course not found" }); return; }
     res.json({ ...course, price: Number(course.price), students: course.enrollments.map(e => ({ ...e.user, progress: e.progress, status: e.status, enrolledAt: e.enrolledAt, lastAccessAt: e.lastAccessAt })), assessments: course.assessments.map(a => ({ ...a, submissions: a._count.submissions, totalStudents: course.enrollments.length, avgScore: a.submissions.filter(s => s.score !== null).length > 0 ? Math.round(a.submissions.filter(s => s.score !== null).reduce((sum, s) => sum + (s.score || 0), 0) / a.submissions.filter(s => s.score !== null).length) : null, pendingCount: a.submissions.filter(s => s.status === "SUBMITTED").length })) });
   } catch (err) { console.error("Instructor course detail:", err); res.status(500).json({ error: "An error occurred" }); }
@@ -189,6 +189,49 @@ router.patch("/lessons/:id", async (req: Request, res: Response) => {
     const lesson = await prisma.lesson.update({ where: { id: req.params.id }, data: parsed.data });
     res.json(lesson);
   } catch (err) { console.error("Update lesson:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── Facilitators ────────────────────────────────────────────
+const facilitatorSchema = z.object({
+  name: z.string().min(1),
+  title: z.string().optional(),
+  bio: z.string().optional(),
+  email: z.string().email().optional().or(z.literal("")),
+  phone: z.string().optional(),
+  linkedIn: z.string().optional(),
+  photo: z.string().optional(),
+});
+
+// ─── POST /api/instructor/courses/:id/facilitators — Add facilitator ─
+router.post("/courses/:id/facilitators", async (req: Request, res: Response) => {
+  try {
+    const parsed = facilitatorSchema.safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: parsed.error.errors[0].message }); return; }
+    const courseId = req.params.id;
+    const course = await prisma.course.findUnique({ where: { id: courseId } });
+    if (!course) { res.status(404).json({ error: "Course not found" }); return; }
+    const order = await prisma.courseFacilitator.count({ where: { courseId } });
+    const facilitator = await prisma.courseFacilitator.create({ data: { ...parsed.data, courseId, order } });
+    res.status(201).json(facilitator);
+  } catch (err) { console.error("Add facilitator:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── PATCH /api/instructor/facilitators/:id — Update facilitator ─
+router.patch("/facilitators/:id", async (req: Request, res: Response) => {
+  try {
+    const parsed = facilitatorSchema.partial().safeParse(req.body);
+    if (!parsed.success) { res.status(400).json({ error: parsed.error.errors[0].message }); return; }
+    const facilitator = await prisma.courseFacilitator.update({ where: { id: req.params.id }, data: parsed.data });
+    res.json(facilitator);
+  } catch (err) { console.error("Update facilitator:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── DELETE /api/instructor/facilitators/:id — Remove facilitator ─
+router.delete("/facilitators/:id", async (req: Request, res: Response) => {
+  try {
+    await prisma.courseFacilitator.delete({ where: { id: req.params.id } });
+    res.json({ message: "Facilitator removed" });
+  } catch (err) { console.error("Delete facilitator:", err); res.status(500).json({ error: "An error occurred" }); }
 });
 
 export default router;
