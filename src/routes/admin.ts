@@ -208,4 +208,22 @@ router.delete("/announcements/:id", async (req: Request, res: Response) => {
   } catch (err) { res.status(500).json({ error: "An error occurred" }); }
 });
 
+// ─── GET /api/admin/evaluations — List all course evaluations ─
+router.get("/evaluations", async (_req: Request, res: Response) => {
+  try {
+    const evaluations = await prisma.courseEvaluation.findMany({
+      include: { user: { select: { firstName: true, lastName: true, email: true } }, course: { select: { title: true } } },
+      orderBy: { submittedAt: "desc" },
+    });
+    res.json(evaluations.map(e => ({
+      id: e.id,
+      student: e.user.firstName + " " + e.user.lastName,
+      email: e.user.email,
+      course: e.course.title,
+      responses: e.responses,
+      submittedAt: e.submittedAt,
+    })));
+  } catch (err) { console.error("Get evaluations:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
 export default router;

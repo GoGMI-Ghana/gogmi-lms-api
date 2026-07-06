@@ -296,4 +296,92 @@ router.post("/:id/admin-enroll", authenticate, async (req: Request, res: Respons
   } catch (err) { console.error("Admin enroll:", err); res.status(500).json({ error: "Enrollment failed" }); }
 });
 
+// ─── GET /api/courses/:id/completions — Completed lesson IDs for current user ─
+router.get("/:id/completions", authenticate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const courseId = req.params.id;
+    const completions = await prisma.lessonCompletion.findMany({
+      where: { userId, lesson: { module: { courseId } } },
+      select: { lessonId: true },
+    });
+    res.json(completions.map(c => c.lessonId));
+  } catch (err) { console.error("Get completions:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── POST /api/courses/lessons/:lessonId/complete — Mark lesson complete ─
+router.post("/lessons/:lessonId/complete", authenticate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const lessonId = req.params.lessonId;
+    const lesson = await prisma.lesson.findUnique({ where: { id: lessonId }, select: { module: { select: { courseId: true } } } });
+    if (!lesson) { res.status(404).json({ error: "Lesson not found" }); return; }
+    const courseId = lesson.module.courseId;
+
+    await prisma.lessonCompletion.upsert({
+      where: { userId_lessonId: { userId, lessonId } },
+      update: {},
+      create: { userId, lessonId },
+    });
+
+    const totalLessons = await prisma.lesson.count({ where: { module: { courseId } } });
+    const completedCount = await prisma.lessonCompletion.count({ where: { userId, lesson: { module: { courseId } } } });
+    const progress = totalLessons > 0 ? Math.round((completedCount / totalLessons) * 100) : 0;
+    const courseCompleted = progress >= 100;
+
+    await prisma.enrollment.updateMany({
+      where: { userId, courseId },
+      data: { progress, lastAccessAt: new Date(), ...(courseCompleted ? { status: "COMPLETED", completedAt: new Date() } : {}) },
+    });
+
+    res.json({ progress, courseCompleted });
+  } catch (err) { console.error("Complete lesson:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── DELETE /api/courses/lessons/:lessonId/complete — Unmark lesson complete ─
+router.delete("/lessons/:lessonId/complete", authenticate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const lessonId = req.params.lessonId;
+    const lesson = await prisma.lesson.findUnique({ where: { id: lessonId }, select: { module: { select: { courseId: true } } } });
+    if (!lesson) { res.status(404).json({ error: "Lesson not found" }); return; }
+    const courseId = lesson.module.courseId;
+
+    await prisma.lessonCompletion.deleteMany({ where: { userId, lessonId } });
+
+    const totalLessons = await prisma.lesson.count({ where: { module: { courseId } } });
+    const completedCount = await prisma.lessonCompletion.count({ where: { userId, lesson: { module: { courseId } } } });
+    const progress = totalLessons > 0 ? Math.round((completedCount / totalLessons) * 100) : 0;
+
+    await prisma.enrollment.updateMany({ where: { userId, courseId }, data: { progress, status: "ACTIVE", completedAt: null } });
+
+    res.json({ progress, courseCompleted: false });
+  } catch (err) { console.error("Uncomplete lesson:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── GET /api/courses/evaluation/status/:courseId — Has current user submitted? ─
+router.get("/evaluation/status/:courseId", authenticate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const courseId = req.params.courseId;
+    const existing = await prisma.courseEvaluation.findUnique({ where: { userId_courseId: { userId, courseId } } });
+    res.json({ submitted: !!existing });
+  } catch (err) { console.error("Evaluation status:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
+// ─── POST /api/courses/evaluation/submit — Submit course evaluation ─
+router.post("/evaluation/submit", authenticate, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.userId;
+    const { courseId, responses } = req.body;
+    if (!courseId || !responses || typeof responses !== "object") { res.status(400).json({ error: "courseId and responses required" }); return; }
+
+    const existing = await prisma.courseEvaluation.findUnique({ where: { userId_courseId: { userId, courseId } } });
+    if (existing) { res.status(409).json({ error: "You have already submitted an evaluation for this course" }); return; }
+
+    await prisma.courseEvaluation.create({ data: { userId, courseId, responses } });
+    res.status(201).json({ message: "Evaluation submitted" });
+  } catch (err) { console.error("Submit evaluation:", err); res.status(500).json({ error: "An error occurred" }); }
+});
+
 export default router;

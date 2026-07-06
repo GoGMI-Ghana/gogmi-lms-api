@@ -19,14 +19,10 @@ jobs:
           script: |
             set -e
             cd "${{ secrets.DEPLOY_PATH }}"
-            echo "=== GIT STATUS ==="
-            git status
-            echo "=== GIT LOG -5 ==="
-            git log --oneline -5
-            echo "=== GIT REFLOG -20 ==="
-            git reflog -20 || true
-            echo "=== ROUTE FILE LINE COUNTS ==="
-            wc -l src/routes/*.ts
-            echo "=== PM2 SHOW gogmi-api ==="
-            pm2 show gogmi-api
-            echo "=== DONE ==="
+            git fetch origin main
+            git reset --hard origin/main
+            npm ci
+            npx prisma generate
+            npx prisma db push --skip-generate
+            pm2 restart "${{ secrets.PM2_APP_NAME }}"
+            pm2 save
